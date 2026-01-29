@@ -243,13 +243,25 @@ class AgentGraphBuilder:
             tool_args = tc.get("args", tc.get("function", {}).get("arguments", {}))
             tool_id = tc.get("id", tool_name)
 
-            # Parse MCP ID from tool name (format: {mcp_id}__{tool_name})
-            mcp_id, actual_tool_name = self._parse_tool_name(tool_name)
+            # Parse MCP ID from tool name (format: mcp_{short_id}_{tool_name})
+            short_id, actual_tool_name = self._parse_tool_name(tool_name)
+            
+            # Get the actual MCP name registered on the platform
+            mcp_name = self.mcp_manager.get_mcp_name_by_short_id(short_id)
+            if not mcp_name:
+                logger.error(f"Could not find MCP name for short_id: {short_id}")
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: MCP not found for tool {tool_name}",
+                        tool_call_id=tool_id,
+                    )
+                )
+                continue
 
             try:
                 # Execute through ArmorIQ (token is now IntentToken object)
                 result = armoriq.invoke(
-                    mcp_name=mcp_id,
+                    mcp_name=mcp_name,  # Use the actual MCP name, not UUID
                     action=actual_tool_name,
                     token=token,
                     params=tool_args if isinstance(tool_args, dict) else {},
