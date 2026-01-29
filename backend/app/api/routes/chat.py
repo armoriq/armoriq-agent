@@ -302,10 +302,17 @@ async def chat_stream(
                             params=tc.get("args", {}),
                         )
 
-                        # Use attribute access for MCPInvocationResult
+                        # Extract data from MCPInvocationResult
+                        result_data = result.data if hasattr(result, 'data') else result
+                        
+                        # Debug log
+                        logger.info(f"Tool result type: {type(result)}")
+                        logger.info(f"Tool result.data type: {type(result_data)}")
+                        logger.info(f"Tool result.data content: {result_data}")
+                        
                         tool_results.append({
                             "name": tc["name"],
-                            "result": result.data if hasattr(result, 'data') else str(result),
+                            "result": result_data,
                         })
 
                         yield _format_sse({
@@ -314,8 +321,65 @@ async def chat_stream(
                         })
 
                     # Continue with tool results
-                    # (In a full implementation, you'd loop back to LLM with results)
-                    collected_content += f"\n\nExecuted {len(tool_results)} tools successfully."
+                    # Format results for display - parse and prettify the JSON data
+                    import json
+                    results_text = "\n\n**Tool Execution Results:**\n\n"
+                    
+                    for tr in tool_results:
+                        tool_name = tr["name"]
+                        result_obj = tr["result"]
+                        
+                        # Extract data from MCPInvocationResult object if needed
+                        if hasattr(result_obj, 'data'):
+                            result_data = result_obj.data
+                        else:
+                            result_data = result_obj
+                        
+                        logger.info(f"Processing tool: {tool_name}, result_data type: {type(result_data)}")
+                        
+                        # Extract the actual data from MCPInvocationResult format
+                        # result.data is a dict with 'content' key containing list of text items
+                        actual_data = None
+                        if isinstance(result_data, dict) and "content" in result_data:
+                            content_list = result_data["content"]
+                            if isinstance(content_list, list) and len(content_list) > 0:
+                                first_item = content_list[0]
+                                if isinstance(first_item, dict) and "text" in first_item:
+                                    # Parse the JSON string
+                                    try:
+                                        actual_data = json.loads(first_item["text"])
+                                    except:
+                                        actual_data = first_item["text"]
+                        
+                        if actual_data:
+                            # Pretty print the JSON
+                            if isinstance(actual_data, dict):
+                                # Format financial records nicely
+                                if "records" in actual_data:
+                                    results_text += "### Financial Records:\n\n"
+                                    for record in actual_data["records"]:
+                                        rec_id = record.get("record_id", "Unknown")
+                                        data = record.get("data", {})
+                                        results_text += f"**{rec_id}**\n"
+                                        for key, value in data.items():
+                                            results_text += f"  - {key.title()}: {value}\n"
+                                        results_text += "\n"
+                                else:
+                                    # Generic dict formatting
+                                    results_text += f"```json\n{json.dumps(actual_data, indent=2)}\n```\n"
+                            else:
+                                results_text += f"{actual_data}\n"
+                        else:
+                            # Fallback to string representation
+                            results_text += f"{result_data}\n"
+                    
+                    collected_content += results_text
+                    
+                    # Send the results as content so frontend displays it
+                    yield _format_sse({
+                        "type": "content",
+                        "content": results_text,
+                    })
                 else:
                     # No valid tools found, skip tool execution
                     logger.info("No valid tool calls aggregated, skipping tool execution")
