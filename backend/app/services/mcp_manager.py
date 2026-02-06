@@ -161,6 +161,9 @@ class MCPConnection:
 
     def __init__(self, config: MCPConfig):
         self.config = config
+        # Cache key fields to survive SQLAlchemy session expiry
+        self.cached_url: Optional[str] = config.url
+        self.cached_name: str = config.name
         self.session: Optional[ClientSession] = None
         self.direct_client: Optional[DirectMCPClient] = None  # For HTTP connections
         self.last_used: datetime = datetime.utcnow()
@@ -540,7 +543,22 @@ class MCPManager:
         Returns the registered name (e.g., 'loan-mcp') that the proxy knows about.
         """
         conn = self.get_mcp_by_short_id(short_id)
-        return conn.config.name if conn else None
+        return conn.cached_name if conn else None
+
+    def get_mcp_stripped_url_by_short_id(self, short_id: str) -> Optional[str]:
+        """
+        Get the stripped URL (without protocol) for the ArmorIQ proxy.
+
+        The proxy expects the URL without 'https://' prefix.
+        Falls back to cached_name if URL is not available.
+        """
+        conn = self.get_mcp_by_short_id(short_id)
+        if not conn:
+            return None
+        url = conn.cached_url
+        if url:
+            return url.split("://", 1)[1] if "://" in url else url
+        return conn.cached_name
 
     def get_mcp_id_by_short_id(self, short_id: str) -> Optional[str]:
         """Get the full MCP UUID by short_id."""
@@ -564,6 +582,35 @@ class MCPManager:
                     **tool_def,
                 })
         return all_tools
+
+    async def ensure_user_connections(self, user_id: str, db: AsyncSession) -> None:
+        """Auto-reconnect any disconnected/idle MCPs for a user before loading tools.
+
+        Also loads MCPs from the database that aren't yet in memory
+        (e.g., after a backend restart).
+        """
+        # Load MCPs from DB that aren't in memory yet
+        result = await db.execute(
+            select(MCPConfig).where(
+                MCPConfig.user_id == user_id,
+                MCPConfig.enabled == True,
+            )
+        )
+        db_configs = result.scalars().all()
+
+        for config in db_configs:
+            mcp_id = str(config.id)
+            if mcp_id not in self.connections:
+                logger.info(f"Loading MCP from DB: {config.name} ({mcp_id})")
+                await self.connect(config)
+
+        # Re-connect any disconnected in-memory connections
+        for mcp_id, conn in list(self.connections.items()):
+            if str(conn.config.user_id) != user_id:
+                continue
+            if conn.status != "connected":
+                logger.info(f"Auto-reconnecting MCP: {conn.cached_name} (status: {conn.status})")
+                await self.connect(conn.config)
 
     def get_langchain_tools(self, user_id: str, db: AsyncSession) -> List[StructuredTool]:
         """Get all tools from connected MCPs as LangChain tools."""

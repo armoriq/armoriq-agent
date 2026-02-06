@@ -125,6 +125,9 @@ class AgentGraphBuilder:
             streaming=False,  # Will handle streaming separately
         )
 
+        # Auto-reconnect any idle/disconnected MCPs before loading tools
+        await self.mcp_manager.ensure_user_connections(state["user_id"], self.db)
+
         # Get tools from connected MCPs
         tools = self.mcp_manager.get_langchain_tools(state["user_id"], self.db)
 
@@ -134,8 +137,20 @@ class AgentGraphBuilder:
         else:
             llm_with_tools = llm
 
+        # Build messages with system prompt
+        messages = list(state["messages"])
+        tool_names = [t.name for t in tools] if tools else []
+        system_prompt = (
+            "You are a helpful AI assistant with access to tools. "
+            "When a user's request can be fulfilled by calling a tool, call it directly with the information provided. "
+            "Do not ask for unnecessary confirmation or authorization before using tools."
+        )
+        if tool_names:
+            system_prompt += f" Available tools: {', '.join(tool_names)}."
+        messages = [SystemMessage(content=system_prompt)] + messages
+
         # Call LLM
-        response = await llm_with_tools.ainvoke(list(state["messages"]))
+        response = await llm_with_tools.ainvoke(messages)
 
         # Check for tool calls
         if hasattr(response, "tool_calls") and response.tool_calls:
@@ -164,12 +179,17 @@ class AgentGraphBuilder:
             agent_id="chat_agent_v1",
         )
 
-        # Convert tool calls to plan
+        # Convert tool calls to plan - resolve MCP URLs for proxy
+        def resolve_mcp_url(tool_name: str) -> str:
+            short_id = self._extract_mcp_from_tool_name(tool_name)
+            stripped = self.mcp_manager.get_mcp_stripped_url_by_short_id(short_id)
+            return stripped or short_id
+
         plan = AgentPlan(
             steps=[
                 PlanStep(
-                    action=tc.get("name", tc.get("function", {}).get("name", "")),
-                    mcp=self._extract_mcp_from_tool_name(tc.get("name", "")),
+                    action=self._parse_tool_name(tc.get("name", tc.get("function", {}).get("name", "")))[1],
+                    mcp=resolve_mcp_url(tc.get("name", "")),
                     description=f"Execute {tc.get('name', '')}",
                     params=tc.get("args", tc.get("function", {}).get("arguments", {})),
                 )
@@ -245,11 +265,11 @@ class AgentGraphBuilder:
 
             # Parse MCP ID from tool name (format: mcp_{short_id}_{tool_name})
             short_id, actual_tool_name = self._parse_tool_name(tool_name)
-            
-            # Get the actual MCP name registered on the platform
-            mcp_name = self.mcp_manager.get_mcp_name_by_short_id(short_id)
-            if not mcp_name:
-                logger.error(f"Could not find MCP name for short_id: {short_id}")
+
+            # Resolve MCP identifier for proxy (expects stripped URL without protocol)
+            mcp_conn = self.mcp_manager.get_mcp_by_short_id(short_id)
+            if not mcp_conn:
+                logger.error(f"Could not find MCP connection for short_id: {short_id}")
                 tool_messages.append(
                     ToolMessage(
                         content=f"Error: MCP not found for tool {tool_name}",
@@ -258,10 +278,13 @@ class AgentGraphBuilder:
                 )
                 continue
 
+            # Use cached stripped URL - proxy expects bare URL without protocol
+            mcp_name = self.mcp_manager.get_mcp_stripped_url_by_short_id(short_id) or mcp_conn.cached_name
+
             try:
                 # Execute through ArmorIQ (token is now IntentToken object)
                 result = armoriq.invoke(
-                    mcp_name=mcp_name,  # Use the actual MCP name, not UUID
+                    mcp_name=mcp_name,  # Use stripped URL, not display name
                     action=actual_tool_name,
                     token=token,
                     params=tool_args if isinstance(tool_args, dict) else {},
@@ -309,19 +332,30 @@ class AgentGraphBuilder:
         return "end"
 
     def _extract_mcp_from_tool_name(self, tool_name: str) -> str:
-        """Extract MCP ID from prefixed tool name."""
-        if "__" in tool_name:
-            return tool_name.split("__")[0].replace("_", "-")
-        return "default-mcp"
+        """Extract MCP short_id from prefixed tool name.
+
+        Tool names follow format: mcp_{short_id}_{tool_name}
+        Example: mcp_af3abb97_wire_transfer -> af3abb97
+        """
+        if tool_name.startswith("mcp_"):
+            rest = tool_name[4:]
+            parts = rest.split("_", 1)
+            if len(parts) >= 1 and len(parts[0]) == 8:
+                return parts[0]
+        return "default"
 
     def _parse_tool_name(self, tool_name: str) -> tuple[str, str]:
-        """Parse MCP ID and actual tool name from prefixed name."""
-        if "__" in tool_name:
-            parts = tool_name.split("__", 1)
-            mcp_id = parts[0].replace("_", "-")
-            actual_name = parts[1]
-            return mcp_id, actual_name
-        return "default-mcp", tool_name
+        """Parse MCP short_id and actual tool name from prefixed name.
+
+        Tool names follow format: mcp_{short_id}_{tool_name}
+        Example: mcp_af3abb97_wire_transfer -> (af3abb97, wire_transfer)
+        """
+        if tool_name.startswith("mcp_"):
+            rest = tool_name[4:]
+            parts = rest.split("_", 1)
+            if len(parts) >= 2 and len(parts[0]) == 8:
+                return parts[0], parts[1]
+        return "default", tool_name
 
 
 # =============================================================================

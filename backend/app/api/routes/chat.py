@@ -201,8 +201,9 @@ async def chat_stream(
                 streaming=True,
             )
 
-            # Get tools from connected MCPs
+            # Auto-reconnect idle MCPs and get tools
             mcp_manager = get_mcp_manager()
+            await mcp_manager.ensure_user_connections(user_id, db)
             tools = mcp_manager.get_langchain_tools(user_id, db)
 
             # Bind tools if available
@@ -211,6 +212,17 @@ async def chat_stream(
                 yield _format_sse({"type": "info", "content": f"Connected to {len(tools)} tools"})
             else:
                 llm_with_tools = llm
+
+            # Add system prompt
+            tool_names = [t.name for t in tools] if tools else []
+            system_prompt = (
+                "You are a helpful AI assistant with access to tools. "
+                "When a user's request can be fulfilled by calling a tool, call it directly with the information provided. "
+                "Do not ask for unnecessary confirmation or authorization before using tools."
+            )
+            if tool_names:
+                system_prompt += f" Available tools: {', '.join(tool_names)}."
+            messages = [SystemMessage(content=system_prompt)] + messages
 
             # Stream LLM response
             collected_content = ""
@@ -248,11 +260,18 @@ async def chat_stream(
 
                     # Create ArmorIQ plan
                     armoriq = ArmorIQService(user_id=user_id)
+
+                    # Resolve MCP identifiers for the plan - proxy expects stripped URLs
+                    def _resolve_mcp_for_plan(tool_name: str) -> str:
+                        short_id = _extract_mcp_id(tool_name)
+                        stripped = mcp_manager.get_mcp_stripped_url_by_short_id(short_id)
+                        return stripped or short_id
+
                     plan = AgentPlan(
                         steps=[
                             PlanStep(
-                                action=tc["name"],
-                                mcp=_extract_mcp_id(tc["name"]),
+                                action=_parse_tool_name(tc["name"])[1],
+                                mcp=_resolve_mcp_for_plan(tc["name"]),
                                 params=tc.get("args", {}),
                             )
                             for tc in aggregated_tools
@@ -289,11 +308,11 @@ async def chat_stream(
 
                         mcp_short_id, tool_name = _parse_tool_name(tc["name"])
 
-                        # Resolve actual MCP name from short_id (proxy needs real name)
-                        actual_mcp_name = mcp_manager.get_mcp_name_by_short_id(mcp_short_id)
+                        # Resolve MCP identifier for proxy (expects stripped URL without protocol)
+                        actual_mcp_name = mcp_manager.get_mcp_stripped_url_by_short_id(mcp_short_id)
                         if not actual_mcp_name:
-                            logger.warning(f"Could not resolve MCP name for short_id: {mcp_short_id}")
-                            actual_mcp_name = mcp_short_id  # Fallback to short_id
+                            actual_mcp_name = mcp_short_id
+                            logger.warning(f"Could not resolve MCP URL for short_id: {mcp_short_id}, falling back to: {actual_mcp_name}")
 
                         result = armoriq.invoke(
                             mcp_name=actual_mcp_name,
@@ -302,13 +321,13 @@ async def chat_stream(
                             params=tc.get("args", {}),
                         )
 
-                        # Extract data from MCPInvocationResult
-                        result_data = result.data if hasattr(result, 'data') else result
-                        
+                        # Extract data from MCPInvocationResult (.result attribute per SDK model)
+                        result_data = result.result if hasattr(result, 'result') else result
+
                         # Debug log
                         logger.info(f"Tool result type: {type(result)}")
-                        logger.info(f"Tool result.data type: {type(result_data)}")
-                        logger.info(f"Tool result.data content: {result_data}")
+                        logger.info(f"Tool result_data type: {type(result_data)}")
+                        logger.info(f"Tool result_data content: {result_data}")
                         
                         tool_results.append({
                             "name": tc["name"],
@@ -317,28 +336,21 @@ async def chat_stream(
 
                         yield _format_sse({
                             "type": "tool_result",
-                            "result": result.data if hasattr(result, 'data') else str(result),
+                            "result": str(result_data),
                         })
 
                     # Continue with tool results
                     # Format results for display - parse and prettify the JSON data
-                    import json
                     results_text = "\n\n**Tool Execution Results:**\n\n"
-                    
+
                     for tr in tool_results:
                         tool_name = tr["name"]
-                        result_obj = tr["result"]
-                        
-                        # Extract data from MCPInvocationResult object if needed
-                        if hasattr(result_obj, 'data'):
-                            result_data = result_obj.data
-                        else:
-                            result_data = result_obj
-                        
+                        result_data = tr["result"]  # Already extracted .result at line 325
+
                         logger.info(f"Processing tool: {tool_name}, result_data type: {type(result_data)}")
-                        
-                        # Extract the actual data from MCPInvocationResult format
-                        # result.data is a dict with 'content' key containing list of text items
+
+                        # Extract the actual data from MCP result format
+                        # result.result is a dict with 'content' key containing list of text items
                         actual_data = None
                         if isinstance(result_data, dict) and "content" in result_data:
                             content_list = result_data["content"]
@@ -348,7 +360,7 @@ async def chat_stream(
                                     # Parse the JSON string
                                     try:
                                         actual_data = json.loads(first_item["text"])
-                                    except:
+                                    except (json.JSONDecodeError, ValueError, TypeError):
                                         actual_data = first_item["text"]
                         
                         if actual_data:
