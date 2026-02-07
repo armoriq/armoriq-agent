@@ -355,6 +355,9 @@ class AgentGraphBuilder:
             parts = rest.split("_", 1)
             if len(parts) >= 2 and len(parts[0]) == 8:
                 return parts[0], parts[1]
+            logger.warning(
+                f"Malformed MCP tool name '{tool_name}': expected format 'mcp_{{8-char-id}}_{{tool_name}}', falling back to 'default'"
+            )
         return "default", tool_name
 
 
