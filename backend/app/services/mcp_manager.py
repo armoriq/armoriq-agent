@@ -164,6 +164,7 @@ class MCPConnection:
         # Cache key fields to survive SQLAlchemy session expiry
         self.cached_url: Optional[str] = config.url
         self.cached_name: str = config.name
+        self.cached_user_id: str = str(config.user_id)
         self.session: Optional[ClientSession] = None
         self.direct_client: Optional[DirectMCPClient] = None  # For HTTP connections
         self.last_used: datetime = datetime.utcnow()
@@ -474,7 +475,7 @@ class MCPManager:
         return [
             conn.to_status_dict()
             for conn in self.connections.values()
-            if str(conn.config.user_id) == user_id
+            if conn.cached_user_id == user_id
         ]
 
     async def call_tool(
@@ -569,7 +570,7 @@ class MCPManager:
         """Get all tools from connected MCPs for a user."""
         all_tools = []
         for mcp_id, conn in self.connections.items():
-            if str(conn.config.user_id) != user_id:
+            if conn.cached_user_id != user_id:
                 continue
             if not conn.config.enabled:
                 continue
@@ -606,7 +607,7 @@ class MCPManager:
 
         # Re-connect any disconnected in-memory connections
         for mcp_id, conn in list(self.connections.items()):
-            if str(conn.config.user_id) != user_id:
+            if conn.cached_user_id != user_id:
                 continue
             if conn.status != "connected":
                 logger.info(f"Auto-reconnecting MCP: {conn.cached_name} (status: {conn.status})")
@@ -616,7 +617,7 @@ class MCPManager:
         """Get all tools from connected MCPs as LangChain tools."""
         all_tools = []
         for mcp_id, conn in self.connections.items():
-            if str(conn.config.user_id) != user_id:
+            if conn.cached_user_id != user_id:
                 continue
             if not conn.config.enabled:
                 continue
