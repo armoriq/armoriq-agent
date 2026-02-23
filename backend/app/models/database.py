@@ -102,6 +102,10 @@ class MCPConfig(Base):
     env = Column(JSONB, nullable=True)  # Environment variables
     enabled = Column(Boolean, default=True)
     idle_timeout_seconds = Column(Integer, default=300)  # 5 min default
+    # MCP Authentication fields
+    auth_type = Column(String(50), nullable=True)  # 'api_key', 'bearer', 'oauth', 'basic'
+    auth_token = Column(Text, nullable=True)  # Encrypted API key or token
+    auth_header_name = Column(String(100), nullable=True)  # Custom header (e.g., 'CONTEXT7_API_KEY')
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -35,9 +35,10 @@ class DirectMCPClient:
     This is more reliable for FastMCP servers that use SSE responses.
     """
 
-    def __init__(self, url: str, auth_token: Optional[str] = None):
+    def __init__(self, url: str, auth_token: Optional[str] = None, auth_header_name: Optional[str] = None):
         self.url = url.rstrip('/')
         self.auth_token = auth_token
+        self.auth_header_name = auth_header_name  # Custom header like 'CONTEXT7_API_KEY'
         self.session_id: Optional[str] = None
         self._http_client: Optional[httpx.AsyncClient] = None
 
@@ -57,7 +58,11 @@ class DirectMCPClient:
             "Accept": "application/json, text/event-stream",
         }
         if self.auth_token:
-            headers["Authorization"] = f"Bearer {self.auth_token}"
+            # Use custom header name if provided, otherwise default to Authorization Bearer
+            if self.auth_header_name:
+                headers[self.auth_header_name] = self.auth_token
+            else:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
         if self.session_id:
             headers["mcp-session-id"] = self.session_id
         return headers
@@ -371,7 +376,15 @@ class MCPManager:
         logger.info(f"Attempting HTTP connection to {conn.config.url}")
 
         try:
-            client = DirectMCPClient(conn.config.url)
+            # Get auth token from config if available
+            auth_token = getattr(conn.config, 'auth_token', None)
+            auth_header_name = getattr(conn.config, 'auth_header_name', None)
+
+            client = DirectMCPClient(
+                conn.config.url,
+                auth_token=auth_token,
+                auth_header_name=auth_header_name
+            )
             await client.__aenter__()
 
             # Initialize session
@@ -597,10 +610,54 @@ class MCPManager:
         # Format: mcp_{short_id}_{tool_name}
         short_id = mcp_id.replace('-', '')[:8]
         unique_name = f"mcp_{short_id}_{tool_def['name']}"
+
+        # Create args_schema from input_schema if available
+        args_schema = None
+        input_schema = tool_def.get("input_schema")
+        if input_schema:
+            try:
+                from pydantic import create_model, Field
+                from typing import Any, Optional
+
+                # Build field definitions from JSON schema properties
+                properties = input_schema.get("properties", {})
+                required_fields = input_schema.get("required", [])
+
+                field_definitions = {}
+                for prop_name, prop_schema in properties.items():
+                    prop_type = prop_schema.get("type", "string")
+                    prop_desc = prop_schema.get("description", "")
+
+                    # Map JSON schema types to Python types
+                    type_mapping = {
+                        "string": str,
+                        "integer": int,
+                        "number": float,
+                        "boolean": bool,
+                        "array": list,
+                        "object": dict,
+                    }
+                    python_type = type_mapping.get(prop_type, Any)
+
+                    # Required fields vs optional
+                    if prop_name in required_fields:
+                        field_definitions[prop_name] = (python_type, Field(description=prop_desc))
+                    else:
+                        field_definitions[prop_name] = (Optional[python_type], Field(default=None, description=prop_desc))
+
+                if field_definitions:
+                    # Create a unique model name
+                    model_name = f"{unique_name.replace('-', '_')}_Args"
+                    args_schema = create_model(model_name, **field_definitions)
+
+            except Exception as e:
+                logger.warning(f"Failed to create args_schema for {unique_name}: {e}")
+
         return StructuredTool.from_function(
             coroutine=tool_func,
             name=unique_name,
             description=tool_def.get("description", f"Tool from MCP: {tool_def['name']}"),
+            args_schema=args_schema,
         )
 
 

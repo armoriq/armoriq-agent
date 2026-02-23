@@ -136,6 +136,10 @@ class MCPConfigBase(BaseModel):
     args: Optional[list[str]] = None
     env: Optional[dict[str, str]] = None
     idle_timeout_seconds: int = 300
+    # MCP Authentication fields
+    auth_type: Optional[str] = None  # 'api_key', 'bearer', 'oauth', 'basic'
+    auth_token: Optional[str] = None  # API key or token (encrypted in DB)
+    auth_header_name: Optional[str] = None  # Custom header (e.g., 'CONTEXT7_API_KEY')
 
 
 class MCPConfigCreate(MCPConfigBase):
