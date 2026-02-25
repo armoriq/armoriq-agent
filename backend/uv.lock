@@ -247,7 +247,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13.1" },
-    { name = "armoriq-sdk", specifier = ">=0.2.1" },
+    { name = "armoriq-sdk", specifier = "==0.2.6" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "cryptography", specifier = ">=42.0.0" },
@@ -290,16 +290,16 @@ dev = [
 
 [[package]]
 name = "armoriq-sdk"
-version = "0.2.1"
+version = "0.2.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "httpx" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ea/c9/f55db8ea96d4da528a038397bd83800a9738944cd17ef0a2177fd470a706/armoriq_sdk-0.2.1.tar.gz", hash = "sha256:fa0e02e5b071113a95f748f9819bbe3299c05bbec035e4e750dcf1550f8e4ac0", size = 118167, upload-time = "2026-01-27T09:59:35.24Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/36/1f5be7245eaa03e5b5d6ba603c31ecc120c0289cdba623a48a4f56420fc7/armoriq_sdk-0.2.6.tar.gz", hash = "sha256:9abed73f3ba3c2d65712ec5e755d96151419123a20675e5bd115f1b50623ebe5", size = 102764, upload-time = "2026-01-29T05:54:20.445Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/3b/82003d05c374b39fef4c7164713a2c506f3675841331b1c42aaeffeadc6d/armoriq_sdk-0.2.1-py3-none-any.whl", hash = "sha256:2128ffa5381836ccea73933cb36157b8262e3fa94232badee3765e17b559348f", size = 117916, upload-time = "2026-01-27T09:59:33.585Z" },
+    { url = "https://files.pythonhosted.org/packages/73/77/3889d9bda5d99e7f5221cbff7743a4067103632e3d29be79dc80f092edcb/armoriq_sdk-0.2.6-py3-none-any.whl", hash = "sha256:0841d6e867974275ff9b3dc8e71ef827333c42c0a4d2562c19f8673c8f56006f", size = 110414, upload-time = "2026-01-29T05:54:18.839Z" },
 ]
 
 [[package]]

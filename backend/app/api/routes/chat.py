@@ -27,6 +27,7 @@ from app.api.routes.llm import get_user_api_key
 from app.services.llm_router import LLMRouter
 from app.services.mcp_manager import get_mcp_manager
 from app.services.armoriq_service import ArmorIQService, AgentPlan, PlanStep
+from app.services.mcp_tool_normalizer import normalize_langchain_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -241,9 +242,18 @@ async def chat_stream(
                     logger.debug(f"Raw tool_calls: {tool_calls}")
 
                 if aggregated_tools:
+                    normalized_tools = [
+                        normalize_langchain_tool_call(
+                            tool_name=tc["name"],
+                            tool_args=tc.get("args", {}),
+                            resolver=mcp_manager,
+                        )
+                        for tc in aggregated_tools
+                    ]
+
                     yield _format_sse({
                         "type": "tool_call",
-                        "content": f"Planning {len(aggregated_tools)} actions...",
+                        "content": f"Planning {len(normalized_tools)} actions...",
                     })
 
                     # Create ArmorIQ plan
@@ -251,11 +261,11 @@ async def chat_stream(
                     plan = AgentPlan(
                         steps=[
                             PlanStep(
-                                action=tc["name"],
-                                mcp=_extract_mcp_id(tc["name"]),
-                                params=tc.get("args", {}),
+                                action=step.action,
+                                mcp=step.resolved_mcp_name,
+                                params=step.params,
                             )
-                            for tc in aggregated_tools
+                            for step in normalized_tools
                         ]
                     )
 
@@ -266,11 +276,22 @@ async def chat_stream(
                         plan=plan,
                     )
 
-                    plan_id = await armoriq.save_intent_plan(
-                        db=db,
-                        conversation_id=str(conversation.id),
-                        captured_plan=captured,
-                    )
+                    # DB connection may have gone stale during LLM streaming + SDK init.
+                    # Rollback and retry once if the flush fails.
+                    try:
+                        plan_id = await armoriq.save_intent_plan(
+                            db=db,
+                            conversation_id=str(conversation.id),
+                            captured_plan=captured,
+                        )
+                    except Exception as db_err:
+                        logger.warning(f"save_intent_plan failed ({db_err}), retrying after rollback...")
+                        await db.rollback()
+                        plan_id = await armoriq.save_intent_plan(
+                            db=db,
+                            conversation_id=str(conversation.id),
+                            captured_plan=captured,
+                        )
 
                     yield _format_sse({
                         "type": "plan_captured",
@@ -281,64 +302,61 @@ async def chat_stream(
                     token = armoriq.get_intent_token(captured)
 
                     tool_results = []
-                    for tc in aggregated_tools:
+                    for step in normalized_tools:
                         yield _format_sse({
                             "type": "tool_call",
-                            "tool_name": tc["name"],
+                            "tool_name": step.raw_tool_name,
                         })
 
-                        mcp_short_id, tool_name = _parse_tool_name(tc["name"])
-
-                        # Resolve actual MCP name from short_id (proxy needs real name)
-                        actual_mcp_name = mcp_manager.get_mcp_name_by_short_id(mcp_short_id)
-                        if not actual_mcp_name:
-                            logger.warning(f"Could not resolve MCP name for short_id: {mcp_short_id}")
-                            actual_mcp_name = mcp_short_id  # Fallback to short_id
+                        if not step.is_resolved:
+                            error_message = f"Could not resolve MCP for tool {step.raw_tool_name}"
+                            logger.warning(error_message)
+                            tool_results.append({
+                                "name": step.raw_tool_name,
+                                "result": {"error": error_message},
+                            })
+                            yield _format_sse({
+                                "type": "tool_result",
+                                "result": {"error": error_message},
+                            })
+                            continue
 
                         result = armoriq.invoke(
-                            mcp_name=actual_mcp_name,
-                            action=tool_name,
+                            mcp_name=step.resolved_mcp_name,
+                            action=step.action,
                             token=token,
-                            params=tc.get("args", {}),
+                            params=step.params,
                         )
 
-                        # Extract data from MCPInvocationResult
-                        result_data = result.data if hasattr(result, 'data') else result
-                        
-                        # Debug log
+                        result_data = armoriq.extract_result_payload(result)
+
                         logger.info(f"Tool result type: {type(result)}")
-                        logger.info(f"Tool result.data type: {type(result_data)}")
-                        logger.info(f"Tool result.data content: {result_data}")
-                        
+                        logger.info(f"Tool result payload type: {type(result_data)}")
+                        logger.info(f"Tool result payload content: {result_data}")
+
                         tool_results.append({
-                            "name": tc["name"],
+                            "name": step.raw_tool_name,
                             "result": result_data,
                         })
 
                         yield _format_sse({
                             "type": "tool_result",
-                            "result": result.data if hasattr(result, 'data') else str(result),
+                            "result": result_data,
                         })
 
                     # Continue with tool results
                     # Format results for display - parse and prettify the JSON data
                     import json
                     results_text = "\n\n**Tool Execution Results:**\n\n"
-                    
+
                     for tr in tool_results:
                         tool_name = tr["name"]
-                        result_obj = tr["result"]
-                        
-                        # Extract data from MCPInvocationResult object if needed
-                        if hasattr(result_obj, 'data'):
-                            result_data = result_obj.data
-                        else:
-                            result_data = result_obj
-                        
+                        result_data = tr["result"]
+
                         logger.info(f"Processing tool: {tool_name}, result_data type: {type(result_data)}")
-                        
-                        # Extract the actual data from MCPInvocationResult format
-                        # result.data is a dict with 'content' key containing list of text items
+
+                        # Extract the actual payload from MCPInvocationResult.result.
+                        # Most MCP results return a dict with "content" containing text items.
                         actual_data = None
                         if isinstance(result_data, dict) and "content" in result_data:
                             content_list = result_data["content"]
@@ -350,7 +368,7 @@ async def chat_stream(
                                         actual_data = json.loads(first_item["text"])
                                     except:
                                         actual_data = first_item["text"]
-                        
+
                         if actual_data:
                             # Pretty print the JSON
                             if isinstance(actual_data, dict):
@@ -372,9 +390,9 @@ async def chat_stream(
                         else:
                             # Fallback to string representation
                             results_text += f"{result_data}\n"
-                    
+
                     collected_content += results_text
-                    
+
                     # Send the results as content so frontend displays it
                     yield _format_sse({
                         "type": "content",
@@ -384,24 +402,39 @@ async def chat_stream(
                     # No valid tools found, skip tool execution
                     logger.info("No valid tool calls aggregated, skipping tool execution")
 
-            # Save assistant message
-            assistant_message = Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=collected_content,
-                tool_calls=tool_calls if tool_calls else None,
-            )
-            db.add(assistant_message)
-            await db.flush()
+            # Save assistant message (with rollback recovery for stale DB connections)
+            try:
+                assistant_message = Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=collected_content,
+                    tool_calls=tool_calls if tool_calls else None,
+                )
+                db.add(assistant_message)
+                await db.flush()
+            except Exception as db_err:
+                logger.warning(f"Saving assistant message failed ({db_err}), retrying after rollback...")
+                await db.rollback()
+                assistant_message = Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content=collected_content,
+                    tool_calls=tool_calls if tool_calls else None,
+                )
+                db.add(assistant_message)
+                await db.flush()
 
             # Update conversation title if first message
-            messages_count = await db.execute(
-                select(Message)
-                .where(Message.conversation_id == conversation.id)
-            )
-            if len(list(messages_count.scalars().all())) <= 2:
-                conversation.title = request.message[:100]
-                await db.flush()
+            try:
+                messages_count = await db.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conversation.id)
+                )
+                if len(list(messages_count.scalars().all())) <= 2:
+                    conversation.title = request.message[:100]
+                    await db.flush()
+            except Exception:
+                logger.warning("Failed to update conversation title, skipping")
 
             yield _format_sse({
                 "type": "done",
@@ -508,45 +541,3 @@ def _aggregate_tool_calls(chunks: list) -> list[dict]:
             logger.error(f"Sample chunk type: {type(sample)}, content: {sample}")
 
     return complete_calls
-
-
-def _extract_mcp_id(tool_name: str) -> str:
-    """
-    Extract MCP ID from tool name.
-
-    Tool names follow format: mcp_{short_id}_{tool_name}
-    Example: mcp_af3abb97_wire_transfer -> af3abb97
-
-    Note: This returns the short_id. The actual UUID is not available in the tool name,
-    but the MCPManager uses the short_id internally for lookups.
-    """
-    if tool_name.startswith("mcp_"):
-        # Remove "mcp_" prefix
-        rest = tool_name[4:]
-        # Split by underscore - first part is the short_id (8 chars)
-        parts = rest.split("_", 1)
-        if len(parts) >= 1 and len(parts[0]) == 8:
-            return parts[0]
-
-    # Fallback debug logging
-    logger.debug(f"Failed to extract MCP ID from tool name: '{tool_name}'")
-    return "default"
-
-
-def _parse_tool_name(tool_name: str) -> tuple[str, str]:
-    """
-    Parse MCP ID and actual tool name from LangChain tool name.
-
-    Tool names follow format: mcp_{short_id}_{tool_name}
-    Example: mcp_af3abb97_wire_transfer -> (af3abb97, wire_transfer)
-    """
-    if tool_name.startswith("mcp_"):
-        # Remove "mcp_" prefix
-        rest = tool_name[4:]
-        # Split by underscore - first part is the short_id (8 chars)
-        parts = rest.split("_", 1)
-        if len(parts) >= 2 and len(parts[0]) == 8:
-            short_id = parts[0]
-            actual_tool = parts[1]
-            return short_id, actual_tool
-    return "default", tool_name

@@ -11,6 +11,7 @@ from app.config import settings, APIRoutes
 from app.db import init_db, close_db
 from app.api.routes import api_router
 from app.models import HealthResponse
+from app.services.mcp_manager import get_mcp_manager
 
 
 @asynccontextmanager
@@ -22,16 +23,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     # Startup
     print(f"Starting {settings.app_name}...")
+    mcp_manager = get_mcp_manager()
 
     # Initialize database (create tables if needed)
     if settings.is_development:
         await init_db()
 
-    yield
+    await mcp_manager.start()
 
-    # Shutdown
-    print(f"Shutting down {settings.app_name}...")
-    await close_db()
+    try:
+        yield
+    finally:
+        # Shutdown
+        print(f"Shutting down {settings.app_name}...")
+        await mcp_manager.stop()
+        await close_db()
 
 
 def create_app() -> FastAPI:

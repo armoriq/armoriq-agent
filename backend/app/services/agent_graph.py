@@ -9,28 +9,25 @@ Implements the Plan → Verify → Execute workflow:
 5. Results fed back to LLM
 """
 import logging
-from typing import TypedDict, Annotated, Sequence, Optional, Any
+from typing import TypedDict, Annotated, Sequence, Optional
 import operator
 
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
-    AIMessage,
     ToolMessage,
-    SystemMessage,
 )
 from langgraph.graph import StateGraph, END
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Defaults
 from app.services.llm_router import LLMRouter
 from app.services.mcp_manager import MCPManager, get_mcp_manager
+from app.services.mcp_tool_normalizer import normalize_langchain_tool_call_payload
 from app.services.armoriq_service import (
     ArmorIQService,
     AgentPlan,
     PlanStep,
     IntentToken,
-    TokenExpiredException,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,6 +155,15 @@ class AgentGraphBuilder:
         if not tool_calls:
             return {}
 
+        normalized_tool_calls = [
+            normalized
+            for tc in tool_calls
+            if (normalized := normalize_langchain_tool_call_payload(tc, self.mcp_manager)) is not None
+        ]
+        if not normalized_tool_calls:
+            logger.warning("No valid tool calls found while capturing plan")
+            return {"pending_tool_calls": None}
+
         # Initialize ArmorIQ service
         armoriq = ArmorIQService(
             user_id=state["user_id"],
@@ -168,12 +174,12 @@ class AgentGraphBuilder:
         plan = AgentPlan(
             steps=[
                 PlanStep(
-                    action=tc.get("name", tc.get("function", {}).get("name", "")),
-                    mcp=self._extract_mcp_from_tool_name(tc.get("name", "")),
-                    description=f"Execute {tc.get('name', '')}",
-                    params=tc.get("args", tc.get("function", {}).get("arguments", {})),
+                    action=tool_call.action,
+                    mcp=tool_call.resolved_mcp_name,
+                    description=f"Execute {tool_call.action}",
+                    params=tool_call.params,
                 )
-                for tc in tool_calls
+                for tool_call in normalized_tool_calls
             ],
             reasoning="Tool execution plan from LLM",
         )
@@ -210,7 +216,7 @@ class AgentGraphBuilder:
             token=intent_token,
         )
 
-        logger.info(f"Captured plan {plan_id} with {len(tool_calls)} steps")
+        logger.info(f"Captured plan {plan_id} with {len(normalized_tool_calls)} steps")
 
         return {
             "captured_plan": {
@@ -239,20 +245,23 @@ class AgentGraphBuilder:
         tool_messages = []
 
         for tc in tool_calls:
-            tool_name = tc.get("name", tc.get("function", {}).get("name", ""))
-            tool_args = tc.get("args", tc.get("function", {}).get("arguments", {}))
-            tool_id = tc.get("id", tool_name)
-
-            # Parse MCP ID from tool name (format: mcp_{short_id}_{tool_name})
-            short_id, actual_tool_name = self._parse_tool_name(tool_name)
-            
-            # Get the actual MCP name registered on the platform
-            mcp_name = self.mcp_manager.get_mcp_name_by_short_id(short_id)
-            if not mcp_name:
-                logger.error(f"Could not find MCP name for short_id: {short_id}")
+            normalized = normalize_langchain_tool_call_payload(tc, self.mcp_manager)
+            if normalized is None:
+                logger.error("Tool execution failed: missing tool name in payload")
                 tool_messages.append(
                     ToolMessage(
-                        content=f"Error: MCP not found for tool {tool_name}",
+                        content="Error: Tool name missing in payload",
+                        tool_call_id=tc.get("id", "unknown"),
+                    )
+                )
+                continue
+
+            tool_id = tc.get("id", normalized.raw_tool_name)
+            if not normalized.is_resolved:
+                logger.error(f"Could not find MCP name for short_id: {normalized.mcp_short_id}")
+                tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: MCP not found for tool {normalized.raw_tool_name}",
                         tool_call_id=tool_id,
                     )
                 )
@@ -261,16 +270,16 @@ class AgentGraphBuilder:
             try:
                 # Execute through ArmorIQ (token is now IntentToken object)
                 result = armoriq.invoke(
-                    mcp_name=mcp_name,  # Use the actual MCP name, not UUID
-                    action=actual_tool_name,
+                    mcp_name=normalized.resolved_mcp_name,
+                    action=normalized.action,
                     token=token,
-                    params=tool_args if isinstance(tool_args, dict) else {},
+                    params=normalized.params,
                 )
 
-                # MCPInvocationResult has .result attribute
+                result_payload = armoriq.extract_result_payload(result)
                 tool_messages.append(
                     ToolMessage(
-                        content=str(result.result),
+                        content=str(result_payload),
                         tool_call_id=tool_id,
                     )
                 )
@@ -307,21 +316,6 @@ class AgentGraphBuilder:
         if state.get("pending_tool_calls"):
             return "capture_plan"
         return "end"
-
-    def _extract_mcp_from_tool_name(self, tool_name: str) -> str:
-        """Extract MCP ID from prefixed tool name."""
-        if "__" in tool_name:
-            return tool_name.split("__")[0].replace("_", "-")
-        return "default-mcp"
-
-    def _parse_tool_name(self, tool_name: str) -> tuple[str, str]:
-        """Parse MCP ID and actual tool name from prefixed name."""
-        if "__" in tool_name:
-            parts = tool_name.split("__", 1)
-            mcp_id = parts[0].replace("_", "-")
-            actual_name = parts[1]
-            return mcp_id, actual_name
-        return "default-mcp", tool_name
 
 
 # =============================================================================

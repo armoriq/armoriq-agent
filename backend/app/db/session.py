@@ -4,17 +4,20 @@ Database session management.
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.pool import NullPool
-
 from app.config import settings
 from app.models.database import Base
 
 
-# Create async engine
+# Create async engine with pool_pre_ping to detect stale connections.
+# NullPool was causing "connection was closed" errors during long-running
+# SSE streams because the remote PostgreSQL server drops idle connections.
 engine = create_async_engine(
     settings.database_url,
     echo=settings.is_development,
-    poolclass=NullPool,  # Use NullPool for Cloud Run (connections per request)
+    pool_pre_ping=True,  # Detect stale connections before using them
+    pool_recycle=300,  # Recycle connections every 5 min to avoid server-side timeouts
+    pool_size=5,
+    max_overflow=10,
 )
 
 # Create async session factory

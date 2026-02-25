@@ -29,7 +29,7 @@ dependencies = [
     # MCP
     "mcp>=1.0.0",
     # ArmorIQ
-    "armoriq-sdk>=0.2.1",
+    "armoriq-sdk==0.2.6",
     # Utilities
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
