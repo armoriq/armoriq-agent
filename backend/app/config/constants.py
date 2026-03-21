@@ -136,7 +136,10 @@ PROVIDER_MODELS: dict[str, list[str]] = {
         "claude-3-sonnet-20240229",
     ],
     "google": [
-        "gemini-2.0-flash-exp",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
         "gemini-1.5-pro",
         "gemini-1.5-flash",
     ],

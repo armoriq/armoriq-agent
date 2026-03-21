@@ -219,10 +219,21 @@ async def chat_stream(
             async for chunk in llm_with_tools.astream(messages):
                 # Handle content chunks
                 if hasattr(chunk, "content") and chunk.content:
-                    collected_content += chunk.content
+                    # Google models may return content as a list instead of str
+                    content_text = chunk.content
+                    if isinstance(content_text, list):
+                        # Extract text from list of dicts like [{"type": "text", "text": "..."}]
+                        parts = []
+                        for part in content_text:
+                            if isinstance(part, dict) and "text" in part:
+                                parts.append(part["text"])
+                            elif isinstance(part, str):
+                                parts.append(part)
+                        content_text = "".join(parts)
+                    collected_content += content_text
                     yield _format_sse({
                         "type": "content",
-                        "content": chunk.content,
+                        "content": content_text,
                     })
 
                 # Handle tool call chunks
@@ -247,17 +258,18 @@ async def chat_stream(
                     })
 
                     # Create ArmorIQ plan
-                    armoriq = ArmorIQService(user_id=user_id)
-                    plan = AgentPlan(
-                        steps=[
-                            PlanStep(
-                                action=tc["name"],
-                                mcp=_extract_mcp_id(tc["name"]),
-                                params=tc.get("args", {}),
-                            )
-                            for tc in aggregated_tools
-                        ]
-                    )
+                    armoriq = ArmorIQService(user_id=str(user_id))
+                    plan_steps = []
+                    for tc in aggregated_tools:
+                        short_id, tool_name = _parse_tool_name(tc["name"])
+                        # Resolve actual MCP name from short_id (backend needs real name for policy scoping)
+                        resolved_mcp_name = mcp_manager.get_mcp_name_by_short_id(short_id) or short_id
+                        plan_steps.append(PlanStep(
+                            action=tool_name,
+                            mcp=resolved_mcp_name,
+                            params=tc.get("args", {}),
+                        ))
+                    plan = AgentPlan(steps=plan_steps)
 
                     # Capture plan
                     captured = armoriq.capture_plan(
@@ -304,12 +316,12 @@ async def chat_stream(
 
                         # Extract data from MCPInvocationResult
                         result_data = result.data if hasattr(result, 'data') else result
-                        
+
                         # Debug log
                         logger.info(f"Tool result type: {type(result)}")
                         logger.info(f"Tool result.data type: {type(result_data)}")
                         logger.info(f"Tool result.data content: {result_data}")
-                        
+
                         tool_results.append({
                             "name": tc["name"],
                             "result": result_data,
@@ -324,19 +336,19 @@ async def chat_stream(
                     # Format results for display - parse and prettify the JSON data
                     import json
                     results_text = "\n\n**Tool Execution Results:**\n\n"
-                    
+
                     for tr in tool_results:
                         tool_name = tr["name"]
                         result_obj = tr["result"]
-                        
+
                         # Extract data from MCPInvocationResult object if needed
                         if hasattr(result_obj, 'data'):
                             result_data = result_obj.data
                         else:
                             result_data = result_obj
-                        
+
                         logger.info(f"Processing tool: {tool_name}, result_data type: {type(result_data)}")
-                        
+
                         # Extract the actual data from MCPInvocationResult format
                         # result.data is a dict with 'content' key containing list of text items
                         actual_data = None
@@ -350,7 +362,7 @@ async def chat_stream(
                                         actual_data = json.loads(first_item["text"])
                                     except:
                                         actual_data = first_item["text"]
-                        
+
                         if actual_data:
                             # Pretty print the JSON
                             if isinstance(actual_data, dict):
@@ -372,9 +384,9 @@ async def chat_stream(
                         else:
                             # Fallback to string representation
                             results_text += f"{result_data}\n"
-                    
+
                     collected_content += results_text
-                    
+
                     # Send the results as content so frontend displays it
                     yield _format_sse({
                         "type": "content",
@@ -444,8 +456,9 @@ def _aggregate_tool_calls(chunks: list) -> list[dict]:
         chunk_index = chunk.get("index") if isinstance(chunk, dict) else getattr(chunk, "index", None)
         chunk_name = chunk.get("name") if isinstance(chunk, dict) else getattr(chunk, "name", None)
         chunk_args = chunk.get("args") if isinstance(chunk, dict) else getattr(chunk, "args", None)
+        chunk_id = chunk.get("id") if isinstance(chunk, dict) else getattr(chunk, "id", None)
 
-        logger.info(f"Chunk {i}: index={chunk_index}, name={chunk_name}, args={chunk_args}")
+        logger.info(f"Chunk {i}: index={chunk_index}, name={chunk_name}, args={chunk_args}, id={chunk_id}")
 
         # Handle ToolCallChunk objects/dicts from streaming
         if chunk_index is not None:
@@ -469,17 +482,27 @@ def _aggregate_tool_calls(chunks: list) -> list[dict]:
                     calls[idx]["args"].update(chunk_args)
                     logger.info(f"  → Updated args dict for index {idx}")
 
-        # Handle complete tool calls
+        # Handle complete tool calls (no index) - common with Google models
         elif chunk_name and chunk_args:
-            key = chunk_name if chunk_name else str(id(chunk))
+            # Use chunk id as key to avoid collisions when same tool called multiple times
+            key = chunk_id or chunk_name or str(id(chunk))
+            # Parse args: could be a JSON string (Google) or a dict (other providers)
+            parsed_args = chunk_args
+            if isinstance(chunk_args, str):
+                try:
+                    parsed_args = json.loads(chunk_args)
+                except json.JSONDecodeError:
+                    logger.error(f"  Failed to parse args string: {chunk_args}")
+                    parsed_args = {}
+            if not isinstance(parsed_args, dict):
+                parsed_args = {}
             calls[key] = {
                 "name": chunk_name,
-                "args": chunk_args if isinstance(chunk_args, dict) else {}
+                "args": parsed_args,
             }
-            logger.info(f"  → Complete tool call: {chunk_name}")
+            logger.info(f"  → Complete tool call: {chunk_name}, args: {parsed_args}")
 
-    # Now parse the concatenated args strings
-    import json
+    # Now parse the concatenated args strings (for OpenAI-style indexed chunks)
     for idx, call_data in calls.items():
         if "args_str" in call_data and call_data["args_str"]:
             logger.info(f"Parsing concatenated args for index {idx}: '{call_data['args_str']}'")
