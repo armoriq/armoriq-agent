@@ -237,7 +237,7 @@ class AuthService:
     # -------------------------------------------------------------------------
     # GOOGLE OAUTH
     # -------------------------------------------------------------------------
-    def get_google_auth_url(self, redirect_uri: str) -> str:
+    def get_google_auth_url(self, redirect_uri: str, state: str = "") -> str:
         """Generate Google OAuth authorization URL."""
         if not settings.google_client_id:
             raise ValueError("Google OAuth not configured")
@@ -250,6 +250,8 @@ class AuthService:
             "access_type": "offline",
             "prompt": "consent",
         }
+        if state:
+            params["state"] = state
         query = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{ExternalURLs.GOOGLE_AUTH_URL}?{query}"
 

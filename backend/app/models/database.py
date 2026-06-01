@@ -186,3 +186,74 @@ class IntentPlan(Base):
     # Relationships
     user = relationship("User", back_populates="intent_plans")
     conversation = relationship("Conversation", back_populates="intent_plans")
+    audit_logs = relationship("AuditLog", back_populates="intent_plan", cascade="all, delete-orphan")
+
+
+class ApiKey(Base):
+    """API keys issued to users for plugin/SDK authentication."""
+
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    key_hash = Column(String(128), nullable=False, unique=True)  # bcrypt/sha256 hash
+    key_prefix = Column(String(20), nullable=False)              # first 16 chars for display
+    status = Column(String(20), default="active")               # active, revoked, expired
+    last_used_at = Column(DateTime, nullable=True)
+    last_used_ip = Column(String(45), nullable=True)
+    usage_count = Column(Integer, default=0)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
+    audit_logs = relationship("AuditLog", back_populates="api_key")
+
+
+class Policy(Base):
+    """ArmorClaude enforcement policies scoped to an API key / agent."""
+
+    __tablename__ = "policies"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    effect = Column(String(20), default="allow")     # allow | deny | hold
+    target = Column(String(200), nullable=True)      # agent_id or MCP server ID
+    tools = Column(JSONB, nullable=True)             # list of tool name patterns
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class AuditLog(Base):
+    """Per-tool-call audit trail emitted by the ArmorClaude plugin."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Link to issuing API key (nullable: SDK-direct calls may not have one)
+    api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True, index=True)
+    # Link to intent plan (derived from the JWT token in the audit body)
+    intent_plan_id = Column(UUID(as_uuid=True), ForeignKey("intent_plans.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    tool = Column(String(200), nullable=False)
+    action = Column(String(200), nullable=False)
+    status = Column(String(20), nullable=False)      # success | failed
+    step_index = Column(Integer, default=0)
+    duration_ms = Column(Integer, default=0)
+    tokens_input = Column(Integer, default=0)
+    tokens_output = Column(Integer, default=0)
+    session_id = Column(String(64), nullable=True)
+    executed_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    input_data = Column(JSONB, nullable=True)
+    output_data = Column(JSONB, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    api_key = relationship("ApiKey", back_populates="audit_logs")
+    intent_plan = relationship("IntentPlan", back_populates="audit_logs")
+    user = relationship("User")

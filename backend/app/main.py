@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings, APIRoutes
 from app.db import init_db, close_db
 from app.api.routes import api_router
+from app.api.routes import iap, dashboard, api_keys, agents, policies, product_auth
 from app.models import HealthResponse
 
 
@@ -68,8 +69,26 @@ def create_app() -> FastAPI:
         """Health check endpoint."""
         return HealthResponse(status="ok", version="0.1.0")
 
-    # Include API routes
+    # Existing chatbot API (namespaced under /api/v1)
     app.include_router(api_router, prefix=APIRoutes.PREFIX)
+
+    # Product API — bare paths consumed by tools-frontend and armorClaude plugin
+    # These intentionally have NO /api/v1 prefix so the frontend hits them directly.
+    app.include_router(product_auth.router)   # /auth/*
+    app.include_router(iap.router)            # /iap/*
+    app.include_router(dashboard.router)      # /dashboard/*
+    app.include_router(api_keys.router)       # /api-keys/*
+    app.include_router(agents.router)         # /agent/*
+    app.include_router(policies.router)       # /policies/*
+
+    # Extended CORS to allow the frontend dev server and the plugin's node process
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     return app
 
