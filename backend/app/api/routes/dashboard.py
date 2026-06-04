@@ -20,7 +20,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 _PRICE_INPUT = 3.00
 _PRICE_OUTPUT = 15.00
 
-ProductName = Literal["armorclaude", "armorcodex"]
+ProductName = Literal["armorclaude", "armorcodex", "armorcopilot"]
 WindowName = Literal["7d", "30d", "90d"]
 
 
@@ -104,6 +104,11 @@ async def product_summary(
         by_model = {
             "o4-mini": {"input": round(tokens_in * 0.6), "output": round(tokens_out * 0.6)},
             "o3":      {"input": round(tokens_in * 0.4), "output": round(tokens_out * 0.4)},
+        }
+    elif product == "armorcopilot":
+        by_model = {
+            "copilot-gpt-4o":    {"input": round(tokens_in * 0.7), "output": round(tokens_out * 0.7)},
+            "copilot-gpt-4o-mini": {"input": round(tokens_in * 0.3), "output": round(tokens_out * 0.3)},
         }
     else:
         by_model = {

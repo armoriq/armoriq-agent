@@ -50,15 +50,12 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.is_development else None,
     )
 
-    # CORS middleware
+    # CORS — allow all origins (required for browser access from localhost:5174 and plugin)
+    # allow_credentials must be False when allow_origins=["*"] (CORS spec requirement)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            settings.app_url,
-            "http://localhost:3000",  # Next.js dev
-            "http://127.0.0.1:3000",
-        ],
-        allow_credentials=True,
+        allow_origins=["*"],
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -80,15 +77,6 @@ def create_app() -> FastAPI:
     app.include_router(api_keys.router)       # /api-keys/*
     app.include_router(agents.router)         # /agent/*
     app.include_router(policies.router)       # /policies/*
-
-    # Extended CORS to allow the frontend dev server and the plugin's node process
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
 
     return app
 
