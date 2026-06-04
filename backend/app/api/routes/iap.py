@@ -124,6 +124,7 @@ async def _ingest_one(db: DbSession, dto: AuditLogCreate, api_key_obj: Optional[
         api_key_id=api_key_obj.id if api_key_obj else None,
         intent_plan_id=intent_plan_id,
         user_id=uuid.UUID(user_id_str) if user_id_str and user_id_str != "unknown" else None,
+        product=dto.product if hasattr(dto, "product") and dto.product else "armorclaude",
         tool=dto.tool,
         action=dto.action,
         status=dto.status,

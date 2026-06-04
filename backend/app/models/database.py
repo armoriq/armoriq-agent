@@ -241,6 +241,7 @@ class AuditLog(Base):
     # Link to intent plan (derived from the JWT token in the audit body)
     intent_plan_id = Column(UUID(as_uuid=True), ForeignKey("intent_plans.id", ondelete="SET NULL"), nullable=True, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    product = Column(String(50), nullable=False, default="armorclaude", index=True)  # armorclaude | armorcodex
     tool = Column(String(200), nullable=False)
     action = Column(String(200), nullable=False)
     status = Column(String(20), nullable=False)      # success | failed
