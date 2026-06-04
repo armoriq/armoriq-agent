@@ -10,6 +10,9 @@ from app.models.database import (
     MCPConnectionStatus,
     UserLLMConfig,
     IntentPlan,
+    ApiKey,
+    Policy,
+    AuditLog,
 )
 from app.models.schemas import (
     # Auth
@@ -48,6 +51,30 @@ from app.models.schemas import (
     HealthResponse,
     ErrorResponse,
     PaginatedResponse,
+    # API Keys
+    ApiKeyCreate,
+    ApiKeyResponse,
+    ApiKeyCreatedResponse,
+    # Policies
+    PolicyCreate,
+    PolicyUpdate,
+    PolicyResponse,
+    # Audit Logs
+    AuditLogCreate,
+    AuditLogResponse,
+    AuditBatchCreate,
+    AuditBatchResponse,
+    # IAP SDK Token
+    SdkTokenCreate,
+    SdkTokenResponse,
+    VerifyStepCreate,
+    # Dashboard
+    TokensConsumed,
+    DashboardSummary,
+    ActivityEntry,
+    TimeseriesEntry,
+    # Agents
+    AgentResponse,
 )
 
 __all__ = [
@@ -60,6 +87,9 @@ __all__ = [
     "MCPConnectionStatus",
     "UserLLMConfig",
     "IntentPlan",
+    "ApiKey",
+    "Policy",
+    "AuditLog",
     # Auth schemas
     "UserBase",
     "UserCreate",
@@ -96,4 +126,28 @@ __all__ = [
     "HealthResponse",
     "ErrorResponse",
     "PaginatedResponse",
+    # API Key schemas
+    "ApiKeyCreate",
+    "ApiKeyResponse",
+    "ApiKeyCreatedResponse",
+    # Policy schemas
+    "PolicyCreate",
+    "PolicyUpdate",
+    "PolicyResponse",
+    # Audit Log schemas
+    "AuditLogCreate",
+    "AuditLogResponse",
+    "AuditBatchCreate",
+    "AuditBatchResponse",
+    # IAP SDK Token schemas
+    "SdkTokenCreate",
+    "SdkTokenResponse",
+    "VerifyStepCreate",
+    # Dashboard schemas
+    "TokensConsumed",
+    "DashboardSummary",
+    "ActivityEntry",
+    "TimeseriesEntry",
+    # Agent schemas
+    "AgentResponse",
 ]

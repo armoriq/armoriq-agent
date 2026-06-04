@@ -290,3 +290,219 @@ class PaginatedResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+# =============================================================================
+# API KEY SCHEMAS
+# =============================================================================
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    expiresAt: Optional[datetime] = None
+
+
+class ApiKeyResponse(BaseModel):
+    apiKeyId: UUID
+    name: str
+    description: Optional[str] = None
+    keyPrefix: str
+    status: str
+    usageCount: int
+    lastUsedAt: Optional[datetime] = None
+    lastUsedIp: Optional[str] = None
+    expiresAt: Optional[datetime] = None
+    createdAt: datetime
+    createdBy: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ApiKeyCreatedResponse(ApiKeyResponse):
+    """Returned only on creation — includes the raw key."""
+    apiKey: str
+
+
+# =============================================================================
+# POLICY SCHEMAS
+# =============================================================================
+
+class PolicyCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    # Accept either the DB field name (effect) or the frontend field name
+    effect: Optional[str] = None
+    defaultEnforcementAction: Optional[str] = None
+    target: Optional[str] = None
+    targetId: Optional[str] = None
+    targetType: Optional[str] = None
+    tools: Optional[list[str]] = None
+
+    def resolved_effect(self) -> str:
+        return self.defaultEnforcementAction or self.effect or "block"
+
+    def resolved_target(self) -> Optional[str]:
+        return self.targetId or self.target
+
+
+class PolicyUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    effect: Optional[str] = None
+    defaultEnforcementAction: Optional[str] = None
+    target: Optional[str] = None
+    targetId: Optional[str] = None
+    tools: Optional[list[str]] = None
+    enabled: Optional[bool] = None
+    isActive: Optional[bool] = None
+
+    def resolved_effect(self) -> Optional[str]:
+        return self.defaultEnforcementAction or self.effect
+
+    def resolved_enabled(self) -> Optional[bool]:
+        if self.isActive is not None:
+            return self.isActive
+        return self.enabled
+
+
+class PolicyResponse(BaseModel):
+    id: UUID
+    name: str
+    description: Optional[str] = None
+    effect: str
+    target: Optional[str] = None
+    tools: Optional[list[str]] = None
+    enabled: bool
+    createdAt: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# =============================================================================
+# AUDIT LOG SCHEMAS
+# =============================================================================
+
+class AuditLogCreate(BaseModel):
+    token: str
+    plan_id: Optional[str] = None
+    step_index: int = 0
+    action: str
+    tool: str
+    input: Optional[Any] = None
+    output: Optional[Any] = None
+    status: str = "success"
+    error_message: Optional[str] = None
+    duration_ms: int = 0
+    executed_at: str
+    is_delegated: Optional[bool] = False
+    delegated_by: Optional[str] = None
+    delegated_to: Optional[str] = None
+
+
+class AuditLogResponse(BaseModel):
+    audit_id: str
+    iap_audit_index: Optional[int] = None
+    iap_commitment: Optional[str] = None
+    iap_sync_status: str = "logged"
+
+
+class AuditBatchCreate(BaseModel):
+    rows: list[AuditLogCreate]
+
+
+class AuditBatchResponse(BaseModel):
+    written: int
+    failures: list[str] = []
+
+
+# =============================================================================
+# IAP SDK TOKEN SCHEMAS
+# =============================================================================
+
+class SdkTokenCreate(BaseModel):
+    user_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    context_id: Optional[str] = None
+    plan: Optional[dict[str, Any]] = None
+    policy: Optional[dict[str, Any]] = None
+    expires_in: float = 600.0
+
+
+class SdkTokenResponse(BaseModel):
+    success: bool = True
+    plan_id: str
+    intent_reference: str
+    plan_hash: str
+    merkle_root: str
+    composite_identity: str
+    step_proofs: list[Any] = []
+    jwt_token: str
+    token: dict[str, Any]
+    client_info: dict[str, Any] = {}
+    policy_validation: dict[str, Any] = {}
+
+
+class VerifyStepCreate(BaseModel):
+    token: str
+    tool_name: Optional[str] = None
+    step_index: Optional[int] = None
+    path: Optional[str] = None
+    proof: Optional[list[Any]] = None
+    context: Optional[dict[str, Any]] = None
+
+
+# =============================================================================
+# DASHBOARD SCHEMAS
+# =============================================================================
+
+class TokensConsumed(BaseModel):
+    input: int
+    output: int
+    total: int
+    estimatedSpendUsd: float
+    byModel: dict[str, dict[str, int]]
+
+
+class DashboardSummary(BaseModel):
+    product: str
+    window: str
+    deviceApprovals: dict[str, Any]
+    activeApiKeys: dict[str, Any]
+    intentPlans: dict[str, Any]
+    auditEvents: dict[str, Any]
+    allowRate: float
+    tokensConsumed: TokensConsumed
+
+
+class ActivityEntry(BaseModel):
+    id: str
+    action: str
+    tool: str
+    status: str
+    executedAt: str
+    agentId: Optional[str] = None
+    sessionId: Optional[str] = None
+
+
+class TimeseriesEntry(BaseModel):
+    date: str
+    allowed: int
+    denied: int
+
+
+# =============================================================================
+# AGENT SCHEMAS
+# =============================================================================
+
+class AgentResponse(BaseModel):
+    agentId: str
+    name: str
+    url: str
+    orgId: Optional[str] = None
+    severityLevel: str = "low"
+    vulnerabilityScore: float = 0.0
+    chainAttacksDetected: int = 0
+    createdAt: str
+    metadata: dict[str, Any] = {}
