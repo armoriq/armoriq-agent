@@ -20,7 +20,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 _PRICE_INPUT = 3.00
 _PRICE_OUTPUT = 15.00
 
-ProductName = Literal["armorclaude", "armorcodex"]
+ProductName = Literal["armorclaude", "armorcodex", "armorcopilot"]
 WindowName = Literal["7d", "30d", "90d"]
 
 
@@ -58,13 +58,10 @@ async def product_summary(
     db: DbSession,
     window: WindowName = Query("30d"),
 ):
-    if product == "armorcodex":
-        return _empty_summary(product, window)
-
     days = _window_days(window)
     since = _since(days)
 
-    # Aggregate from audit_logs
+    # Aggregate from audit_logs filtered by product
     logs_result = await db.execute(
         select(
             func.count().label("total"),
@@ -73,7 +70,7 @@ async def product_summary(
             ).label("allowed"),
             func.sum(AuditLog.tokens_input).label("tokens_in"),
             func.sum(AuditLog.tokens_output).label("tokens_out"),
-        ).where(AuditLog.executed_at >= since)
+        ).where(AuditLog.executed_at >= since, AuditLog.product == product)
     )
     row = logs_result.one()
     total = row.total or 0
@@ -86,6 +83,7 @@ async def product_summary(
     plans_result = await db.execute(
         select(func.count(func.distinct(AuditLog.intent_plan_id))).where(
             AuditLog.executed_at >= since,
+            AuditLog.product == product,
             AuditLog.intent_plan_id.isnot(None),
         )
     )
@@ -101,6 +99,23 @@ async def product_summary(
     total_tokens = tokens_in + tokens_out
     spend = (tokens_in / 1_000_000) * _PRICE_INPUT + (tokens_out / 1_000_000) * _PRICE_OUTPUT
 
+    # Model breakdown labels differ per product
+    if product == "armorcodex":
+        by_model = {
+            "o4-mini": {"input": round(tokens_in * 0.6), "output": round(tokens_out * 0.6)},
+            "o3":      {"input": round(tokens_in * 0.4), "output": round(tokens_out * 0.4)},
+        }
+    elif product == "armorcopilot":
+        by_model = {
+            "copilot-gpt-4o":    {"input": round(tokens_in * 0.7), "output": round(tokens_out * 0.7)},
+            "copilot-gpt-4o-mini": {"input": round(tokens_in * 0.3), "output": round(tokens_out * 0.3)},
+        }
+    else:
+        by_model = {
+            "claude-sonnet-4-6": {"input": round(tokens_in * 0.7), "output": round(tokens_out * 0.7)},
+            "claude-haiku-4-5":  {"input": round(tokens_in * 0.3), "output": round(tokens_out * 0.3)},
+        }
+
     return {
         "product": product,
         "window": window,
@@ -114,16 +129,7 @@ async def product_summary(
             "output": tokens_out,
             "total": total_tokens,
             "estimatedSpendUsd": round(spend, 6),
-            "byModel": {
-                "claude-sonnet-4-6": {
-                    "input": round(tokens_in * 0.7),
-                    "output": round(tokens_out * 0.7),
-                },
-                "claude-haiku-4-5": {
-                    "input": round(tokens_in * 0.3),
-                    "output": round(tokens_out * 0.3),
-                },
-            },
+            "byModel": by_model,
         },
     }
 
@@ -134,11 +140,11 @@ async def product_recent_activity(
     db: DbSession,
     limit: int = Query(50, ge=1, le=200),
 ):
-    if product == "armorcodex":
-        return []
-
     result = await db.execute(
-        select(AuditLog).order_by(AuditLog.executed_at.desc()).limit(limit)
+        select(AuditLog)
+        .where(AuditLog.product == product)
+        .order_by(AuditLog.executed_at.desc())
+        .limit(limit)
     )
     logs = result.scalars().all()
 
@@ -162,9 +168,6 @@ async def product_timeseries(
     db: DbSession,
     window: WindowName = Query("30d"),
 ):
-    if product == "armorcodex":
-        return []
-
     days = _window_days(window)
     since = _since(days)
 
@@ -176,7 +179,7 @@ async def product_timeseries(
                 case((AuditLog.status == "success", 1), else_=0)
             ).label("allowed"),
         )
-        .where(AuditLog.executed_at >= since)
+        .where(AuditLog.executed_at >= since, AuditLog.product == product)
         .group_by("day")
         .order_by("day")
     )

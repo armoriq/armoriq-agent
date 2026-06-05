@@ -390,6 +390,7 @@ class AuditLogCreate(BaseModel):
     step_index: int = 0
     action: str
     tool: str
+    product: str = "armorclaude"  # armorclaude | armorcodex
     input: Optional[Any] = None
     output: Optional[Any] = None
     status: str = "success"
